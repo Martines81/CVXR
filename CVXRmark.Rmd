@@ -1,0 +1,245 @@
+---
+title: "Rmkdow"
+author: "Martin Estivals"
+date: "12 Juillet, 2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(prioritizr)
+library(data.table)
+library(raster,rgdal)
+```
+
+## Initialisation des parcelles à enlever
+
+```{r initialisation}
+
+  nbCol <- 10
+  nbLigne <-10
+  nbIter <- 15
+  #On enleve les parcelles qui ont ete deja exploite des prix, il faut l enlever plus loin de la couche raster
+  nvllExpl <- c()
+  exploit <- c()#Les parcelles deja exploitees
+  for (i in 1:nbLigne){
+    for(j in 1:nbCol){
+      if (abs(j-5)+i <= 4){
+        exploit <- c(exploit,0)
+      }else{exploit <- c(exploit,1)}
+    }
+  }
+
+```
+
+## Creation des raster que l'on veut à la fin.
+
+
+```{r pressure, echo=TRUE}
+
+  #Initialisation des liste qui resument
+  parcellesExploitees <- raster(ncol=nbCol, nrow=nbLigne,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+  
+  values(parcellesExploitees) <- exploit
+  #plot(parcellesExploitees,main = "les parcelles non exploitees")
+  
+  nouvellesParcelles <- raster(ncol=nbCol, nrow=nbLigne,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+  
+  values(nouvellesParcelles) <- 0
+  
+  listAnnee <- toString(0)
+  listProfit <- data.frame(qttAvExp = c(),qttProt = c(),qttAvExpNnProt = c(),qtteLog = c(),cout=c())
+                      
+  listSol <- nouvellesParcelles
+  listParcellesAn <- nouvellesParcelles
+  listExploitee <- parcellesExploitees
+
+```
+
+
+## La carte des disponibilités
+
+```{r dispo}
+
+#la carte des disponibilités
+  r <- raster(ncol=nbCol, nrow=nbLigne,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+  
+  
+  vals <- c()
+  for (i in 1:nbLigne){
+    for (j in 1:nbCol){
+      if (j <= 5){
+        if (i <= 5){
+          vals <- c(vals,rnorm(1,10))#modifier le point de depart
+        }else{
+          vals <- c(vals,rnorm(1,12))
+        }
+      }else{
+        if (i <= 5){
+          vals <- c(vals,rnorm(1,14))
+        }else{
+          vals <- c(vals,rnorm(1,16))
+        }
+      }
+    }
+  }
+  vals <- vals * exploit  
+  
+  values(r) <- vals
+  plot(r, main="carte des disponibilités")
+```
+
+
+## Initialisation de lockIn, du premier LockOut et des couts d'exploitation
+
+```{r locks}
+
+{
+    listId <- c()
+    listVal <- c()
+    listIn <- c()
+    listOut <- c()
+  }
+  
+  for (i in 1:nbLigne){
+    for(j in 1:nbCol){
+      ID <- toString(i+(j-1)*nbCol)
+      listId <- c(listId, ID)
+      listVal <- c(listVal,5 + i + abs(j-5))
+      if (i == 1 & j == 5) {
+        listIn <- c(listIn,TRUE)
+      }
+      else{
+        listIn <- c(listIn,FALSE)
+      }
+      if (runif(1,0,1)<= 0.2){
+        listOut <- c(listOut,TRUE)
+      }else{
+        listOut <- c(listOut,FALSE)
+      }
+    }
+  }
+  
+  
+  listVal <- listVal * exploit
+  
+  lockIn <- raster(ncol=nbCol, nrow=nbLigne,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+  
+  values(lockIn) <- listIn
+  
+  cost <- raster(ncol=nbCol, nrow=nbLigne,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+  
+    values(cost) <- listVal
+  
+  lockOut <- raster(ncol=nbCol, nrow=nbLigne,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+  
+  values(lockOut) <- listOut*exploit
+ 
+  plot(cost, main="x les couts")
+  
+  plot(lockIn, main="lockIn")
+  
+  plot(lockOut, main="lockOut") 
+  
+  listProfit <- rbind(listProfit,data.frame(qttAvExp = sum(vals),qttProt = sum(vals*listOut), qttAvExpNnProt = sum(vals*(1-listOut)),qtteLog = 0,cout = 0))
+
+```
+
+## On créé le modèle
+
+``` {r modele,results = "hide", error = TRUE}
+
+for (k in 1:nbIter){  
+  vals <- vals * exploit  
+  
+  values(r) <- vals
+  
+  r3 <- r
+  contraint <- stack(r,r,r3)
+  
+  
+  values(cost) <- listVal
+  
+  
+  values(lockOut) <- listOut*exploit
+
+  
+  
+  
+  p1 <- problem(cost, features = contraint) %>%
+    add_min_set_objective() %>%
+    #add_relative_targets(0.10) %>%
+    add_absolute_targets(90) %>%
+    add_binary_decisions() %>%
+    add_contiguity_constraints()  %>%
+    add_locked_in_constraints(lockIn)%>%
+    add_locked_out_constraints(lockOut)%>%
+    add_gurobi_solver(gap=0)#%>%add_boundary_penalties(penalty = 15, edge_factor = 0.5)
+
+  s1 <- solve(p1)
+ 
+  #on actualise les parcelles exploitees
+  for (i in 1:(nbCol*nbLigne)){
+    nvllExpl[i] <- exploit[i] + s1@data@values[i]-1
+    if (nvllExpl[i] <= 0){nvllExpl[i] <- 0}
+  }
+  values(nouvellesParcelles) <- nvllExpl
+  
+  
+  
+  #on on regarde quelles sont les nouvelles parcelles exploitees
+  for (i in 1:(nbCol*nbLigne)){
+    exploit[i] <- exploit[i] - s1@data@values[i]
+    if (exploit[i] <= 0){exploit[i] <- 0}
+  }
+  values(parcellesExploitees) <- exploit
+  
+  #plot(cost, main="x les couts")
+  
+  #plot(r, main="r les effectifs de conservations")
+  
+  #plot(lockIn, main="lockIn")
+  
+  #plot(lockOut, main="lockOut")
+  
+  #plot(s1,main = "voici la solution")
+  
+  #print(attr(s1, "objective"))
+  
+  #print(attr(s1, "runtime"))
+  
+  #print(attr(s1, "status"))
+  
+  #plot(parcellesExploitees,main = "les parcelles non exploitees")
+  
+  #plot(nouvellesParcelles,main = "les nouvelles parcelles")
+  
+  
+  listAnnee <- c(listAnnee, toString(k))
+  listProfit <- rbind(listProfit,data.frame(qttAvExp = sum(vals),qttProt = sum(vals*listOut),qttAvExpNnProt = sum(vals*(1-listOut)),qtteLog = sum(s1@data@values*vals),cout = sum(s1@data@values*cost@data@values)))
+  listSol <- stack(listSol,s1)
+  listParcellesAn <- stack(listParcellesAn,nouvellesParcelles)
+  listExploitee <- stack(listExploitee,parcellesExploitees)
+}
+```
+
+
+## Bilan
+
+```{r plots}
+
+spplot(listSol,main="la liste des solution selon les annees",names.attr=listAnnee)
+spplot(listParcellesAn, main="la liste des parcelles exploitee cette annee",names.attr=listAnnee)
+spplot(listExploitee, main="la liste des parcelles qui n'ont pas encore ete exploitees",names.attr=listAnnee)
+listProfit
+
+
+```
+
+##idees
+pour integrer plusieurs rotation  juste plusieurs couches
+
+Si on peut juste passer pas une parcelle en protection, on peut mettre ressource a 0 et
+un cout tres eleve
+
+On peut rajouter la route avec un cout de 0 et plusieurs point obligatoires
