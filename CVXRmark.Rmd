@@ -7,28 +7,24 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-library(prioritizr)
-library(data.table)
-library(raster,rgdal)
+library(CVXR)
+library(Rglpk)
+library(ggplot2)
+library(ggforce)
+library('plot.matrix')
 ```
 
-## Initialisation des parcelles à enlever
+## Initialisation des parametre
 
 ```{r initialisation}
 
-  nbCol <- 10
-  nbLigne <-10
-  nbIter <- 15
-  #On enleve les parcelles qui ont ete deja exploite des prix, il faut l enlever plus loin de la couche raster
-  nvllExpl <- c()
-  exploit <- c()#Les parcelles deja exploitees
-  for (i in 1:nbLigne){
-    for(j in 1:nbCol){
-      if (abs(j-5)+i <= 4){
-        exploit <- c(exploit,0)
-      }else{exploit <- c(exploit,1)}
-    }
-  }
+  ncol <- 10
+npar <- ncol*ncol
+nrot <- 10
+coutmax<- 40
+nbmax1<- 32
+nbmax2<- 16
+valeurdeDepart <- 5
 
 ```
 
