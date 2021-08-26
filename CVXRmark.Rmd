@@ -11,6 +11,7 @@ library(CVXR)
 library(Rglpk)
 library(ggplot2)
 library(ggforce)
+library(raster,rgdal)
 library('plot.matrix')
 ```
 
@@ -18,15 +19,166 @@ library('plot.matrix')
 
 ```{r initialisation}
 
-  ncol <- 10
+ncol <- 10
 npar <- ncol*ncol
 nrot <- 10
 coutmax<- 40
 nbmax1<- 32
 nbmax2<- 16
 valeurdeDepart <- 5
+cInit <- c(1:(valeurdeDepart-1),(valeurdeDepart+1):npar)
 
 ```
 
-## Creation des raster que l'on veut à la fin.
+## préparation des données
+
+
+```{r modele}
+
+
+adjacent <- array(0,dim=c(npar,npar))
+for (i in 1:npar){
+  if (i+ncol <= npar){    adjacent[i,i+ncol] <- 1}
+  if (i%%ncol !=0){adjacent[i,i+1] <- 1}
+  if (i > ncol){    adjacent[i,i-ncol] <- 1}
+  if (i%%ncol !=1){adjacent[i,i-1] <- 1}    
+  
+  #if ((i%%ncol !=1)&&(i > ncol)){adjacent[i,i-1-ncol] <- 1}    
+  #if ((i%%ncol !=1)&&(i+ncol <= npar)){adjacent[i,i-1+ncol] <- 1}    
+  
+}
+
+
+
+vals <- c()
+listVal <- c()
+
+for (i in 1:ncol){
+  for (j in 1:ncol){
+    listVal <- c(listVal,5 + i + abs(j-5))
+    if (j <= 5){
+      if (i <= 5){
+        vals <- c(vals,rnorm(1,10))#modifier le point de depart
+      }else{
+        vals <- c(vals,rnorm(1,20))
+      }
+    }else{
+      if (i <= 5){
+        vals <- c(vals,rnorm(1,30))
+      }else{
+        vals <- c(vals,rnorm(1,40))
+      }
+    }
+  }
+}
+
+r <- raster(ncol=ncol, nrow=ncol,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+rcout <- raster(ncol=ncol, nrow=ncol,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+Recolt <- raster(ncol=ncol, nrow=ncol,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+afficherast <- raster(ncol=ncol, nrow=ncol,xmn=0, xmx=1, ymn=0, ymx=1,crs=as.character(NA))
+
+
+val <- array(0,dim=c(npar,nrot))
+cout <- array(0,dim=c(npar,nrot))
+
+for (i in 1:nrot){
+  for (j in 1:npar){
+    val[j,i] <- vals[j]
+    cout[j,i] <- listVal[j]  }}
+
+
+values(r) <- vals
+values(rcout) <- listVal
+
+
+plot(r, main="carte des disponibilites")
+plot(rcout, main="carte des couts")
+
+
+```
+
+## Creation du modèle
+
+
+```{r creation modele}
+
+x <- Variable(npar,nrot,name = "x", boolean =TRUE)
+u <- Variable(npar,nrot,name = "u", integer =TRUE)
+
+
+obj <- Maximize(min_entries(sum_entries(x*val,axis = 2)))
+
+constraints <- list(
+  #u <= nbmax1,
+  u[,1] <= nbmax1,####################pas obligatoire
+  u[,2:nrot] <= nbmax2,
+  x*nbmax1 >= u,
+  x <= u,
+  sum_entries(x*cout,axis = 2) <= coutmax,#meilleure contrainte : x*(cout-val*0.1)
+
+#  u[5,1]*1 %% 64 <= 100,
+
+  sum_entries(x,axis = 1) <= 1,
+  u[valeurdeDepart,1] == nbmax1)
+
+constraints <- c(constraints, 4*u[cInit,1] <=  adjacent[cInit,1:npar] %*% u[1:npar,1])
+
+for (i in 2:nrot){
+  constraints <- c(constraints, 4*u[cInit,i] <=  adjacent[cInit,1:npar] %*% u[1:npar,i]+ npar *sum_entries(adjacent[cInit,1:npar] %*% x[1:npar,1:(i-1)],axis = 1))#npar *adjacent[cInit,1:npar] %*% x[1:npar,1])
+}
+
+
+p <- Problem(obj, constraints)
+```
+
+## Execution du modèle
+
+```{r Execution}
+p <- Problem(obj, constraints)
+result <- solve(p,solver="GUROBI", verbose=TRUE,MIPGap  = 15e-2,IterationLimit =10000000)
+
+```
+
+# Visualisation des résultats
+
+```{r resultat}
+
+tableau <- data.frame(x=result$getValue(x),u = result$getValue(u))#, c = result$getValue(c))
+#tableau
+
+
+center <- result$value
+center 
+sommes <- array(0,dim=c(nrot+1))
+lecout <- array(0,dim=c(nrot+1))
+for (i in 1:nrot){
+  sommes[i] <-  c <- sum(tableau[1:npar,i]*val[1:npar])
+  lecout[i] <-  c <- sum(tableau[1:npar,i]*cout[1:npar])
+}
+sommes[nrot+1] <- sum(sommes[1:nrot])
+lecout[nrot+1] <- sum(lecout[1:nrot])
+
+lecout
+sommes
+
+```
+
+
+```{r plot resultat}
+
+aff <- array(0,dim=c(ncol,ncol))
+for (rot in 1:nrot){
+  for (col in 1:ncol){
+    for(lig in 1:ncol){
+      aff[col,lig] <- aff[col,lig]+rot*tableau[lig+(col-1)*ncol,rot]
+      
+    }
+  }
+}
+values(afficherast) <- aff
+plot(afficherast, main ="c est la solution")
+aff
+
+
+```
 
